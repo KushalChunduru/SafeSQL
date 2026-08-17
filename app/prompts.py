@@ -1,0 +1,164 @@
+"""Dynamic prompt construction: filtered schema + FK relationships + sample
+values + business glossary + few-shot examples, assembled per question."""
+import re
+
+FEW_SHOT_EXAMPLES = [
+    {
+        "question": "How many customers signed up in 2025?",
+        "sql": "SELECT COUNT(*) AS customer_count FROM customers WHERE signup_date >= '2025-01-01' AND signup_date < '2026-01-01';",
+    },
+    {
+        "question": "What are the top 5 best-selling products by quantity?",
+        "sql": (
+            "SELECT p.product_name, SUM(oi.quantity) AS total_quantity "
+            "FROM order_items oi JOIN products p ON oi.product_id = p.product_id "
+            "GROUP BY p.product_name ORDER BY total_quantity DESC LIMIT 5;"
+        ),
+    },
+    {
+        "question": "What is the average rating per product category?",
+        "sql": (
+            "SELECT c.category_name, AVG(r.rating) AS avg_rating "
+            "FROM reviews r "
+            "JOIN products p ON r.product_id = p.product_id "
+            "JOIN categories c ON p.category_id = c.category_id "
+            "GROUP BY c.category_name ORDER BY avg_rating DESC;"
+        ),
+    },
+    {
+        "question": "List customers from Germany who placed an order in the last 90 days.",
+        "sql": (
+            "SELECT DISTINCT cu.customer_id, cu.first_name, cu.last_name "
+            "FROM customers cu JOIN orders o ON cu.customer_id = o.customer_id "
+            "WHERE cu.country = 'DE' AND o.order_date >= CURRENT_DATE - INTERVAL '90 days';"
+        ),
+    },
+    {
+        "question": "What is the net revenue by month for delivered orders?",
+        "sql": (
+            "SELECT DATE_TRUNC('month', o.order_date) AS month, "
+            "SUM(oi.quantity * oi.unit_price - oi.discount) AS net_revenue "
+            "FROM orders o JOIN order_items oi ON o.order_id = oi.order_id "
+            "WHERE o.status = 'delivered' "
+            "GROUP BY 1 ORDER BY 1;"
+        ),
+    },
+]
+
+AMBIGUOUS_TERMS = {
+    "revenue": [
+        {
+            "label": "gross_revenue",
+            "description": "Total sales before discounts: SUM(quantity * unit_price)",
+            "example_sql": "SELECT SUM(quantity * unit_price) AS gross_revenue FROM order_items;",
+        },
+        {
+            "label": "net_revenue",
+            "description": "Sales after line-item discounts: SUM(quantity * unit_price - discount)",
+            "example_sql": "SELECT SUM(quantity * unit_price - discount) AS net_revenue FROM order_items;",
+        },
+    ],
+    "sales": [
+        {
+            "label": "order_count",
+            "description": "Number of orders placed",
+            "example_sql": "SELECT COUNT(*) AS order_count FROM orders;",
+        },
+        {
+            "label": "gross_revenue",
+            "description": "Total dollar amount sold: SUM(quantity * unit_price)",
+            "example_sql": "SELECT SUM(quantity * unit_price) AS gross_revenue FROM order_items;",
+        },
+    ],
+}
+
+
+def _format_schema_block(schema: dict) -> str:
+    lines = []
+    for name, info in schema.items():
+        lines.append(f"TABLE {name}" + (f" -- {info.description}" if info.description else ""))
+        for col in info.columns:
+            flags = []
+            if col.is_primary_key:
+                flags.append("PK")
+            if col.sample_values:
+                flags.append(f"e.g. {col.sample_values}")
+            suffix = f"  ({', '.join(flags)})" if flags else ""
+            lines.append(f"  - {col.name}: {col.type}{suffix}")
+        for fk in info.foreign_keys:
+            lines.append(f"  FK: {fk.column} -> {fk.ref_table}.{fk.ref_column}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _format_few_shot(examples: list) -> str:
+    blocks = []
+    for ex in examples:
+        blocks.append(f"Q: {ex['question']}\nSQL: {ex['sql']}")
+    return "\n\n".join(blocks)
+
+
+SYSTEM_PROMPT = """You are SafeSQL, an expert SQL analyst. You translate natural-language \
+business questions into a single read-only SQL SELECT statement against the given schema.
+
+Rules:
+- Only ever produce SELECT statements. Never write INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/TRUNCATE.
+- Use only the tables and columns given in the schema below. Do not invent columns.
+- Prefer explicit JOIN ... ON clauses using the given foreign keys.
+- If the question is ambiguous (a term could reasonably mean more than one thing, e.g. \
+"revenue" as gross vs net), do NOT guess: report that clarification is needed instead of \
+generating SQL.
+- If the question cannot be answered with the given schema (asks about data that doesn't \
+exist here), say so plainly rather than inventing a query.
+- Always add a reasonable LIMIT for exploratory row-level queries unless the question is \
+clearly an aggregate.
+"""
+
+
+def build_generation_prompt(question: str, schema: dict, variant: str = "primary") -> str:
+    schema_block = _format_schema_block(schema)
+    few_shot = _format_few_shot(FEW_SHOT_EXAMPLES)
+    variant_hint = ""
+    if variant == "alternate":
+        variant_hint = (
+            "\nIMPORTANT: Produce an INDEPENDENT alternative query strategy from the most "
+            "obvious one - e.g. use a different join order, a subquery/CTE instead of a "
+            "direct join, or a different aggregation path - while still correctly answering "
+            "the question. This is used to cross-check correctness against a first attempt.\n"
+        )
+    return f"""{SYSTEM_PROMPT}
+
+SCHEMA:
+{schema_block}
+
+EXAMPLES FOR THIS SCHEMA:
+{few_shot}
+{variant_hint}
+QUESTION: {question}
+
+Respond using the generate_sql tool."""
+
+
+def build_back_translation_prompt(sql: str) -> str:
+    return f"""Here is a SQL query:
+
+{sql}
+
+In one sentence, state precisely what business question this SQL query answers. \
+Be specific about filters, grouping, and aggregation - don't just restate the table names."""
+
+
+QUALIFIERS = ("net", "gross")
+
+
+def build_ambiguity_check(question: str) -> str | None:
+    q_lower = question.lower()
+    for term, interpretations in AMBIGUOUS_TERMS.items():
+        if term not in q_lower:
+            continue
+        # Already disambiguated in the question itself (e.g. "net revenue").
+        pattern = r"\b(" + "|".join(QUALIFIERS) + r")\s+" + re.escape(term) + r"\b"
+        if re.search(pattern, q_lower):
+            continue
+        return term
+    return None

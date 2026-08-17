@@ -1,0 +1,143 @@
+@import "tailwindcss";
+
+@theme {
+  /* --- paper: the bright page/card surfaces --- */
+  --color-paper-50: #faf6ec;
+  --color-paper-100: #f2ead9;
+  --color-paper: #fffdf8;
+
+  /* --- ink: dark surfaces (nav, footer, code, chips) — deliberately kept dark for contrast --- */
+  --color-ink-950: #0e0e10;
+  --color-ink-900: #141417;
+  --color-ink-850: #191a1f;
+  --color-ink-800: #202127;
+  --color-ink-700: #2b2c33;
+  --color-ink-600: #3a3b44;
+  --color-ink-500: #55565f;
+
+  /* --- slate: dark text-on-light scale (headings/body/labels on paper surfaces) --- */
+  --color-slate-950: #15151a;
+  --color-slate-700: #3a3a44;
+  --color-slate-600: #52525e;
+  --color-slate-500: #6c6c78;
+  --color-slate-400: #8c8c96;
+
+  /* --- mist: light text-on-dark scale (used only inside ink surfaces: nav/footer/code) --- */
+  --color-mist-100: #f4f2ea;
+  --color-mist-300: #c7c6d1;
+  --color-mist-500: #94939f;
+  --color-mist-600: #75747f;
+
+  /* --- accents: bright + saturated, tuned for legibility on paper --- */
+  --color-cyan-glow: #2b52ff;    /* electric indigo — primary brand */
+  --color-violet-glow: #7c3aed;  /* vivid violet — secondary */
+  --color-mint: #0f9d58;         /* vivid readable green — safe/pass */
+  --color-amber: #d97706;        /* deep amber — warning */
+  --color-rose: #e11d3f;         /* hot red — danger/blocked */
+
+  /* punchy solid-fill variants (full saturation, used for button/badge fills against black text) */
+  --color-coral: #ff5a36;
+  --color-lime: #c6ff3b;
+  --color-sun: #ffc53d;
+
+  --font-display: "Space Grotesk", "Inter", ui-sans-serif, sans-serif;
+  --font-shout: "Archivo Black", "Space Grotesk", ui-sans-serif, sans-serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  --shadow-brut-sm: 3px 3px 0 0 var(--color-ink-950);
+  --shadow-brut: 6px 6px 0 0 var(--color-ink-950);
+  --shadow-brut-lg: 10px 10px 0 0 var(--color-ink-950);
+  --shadow-brut-press: 2px 2px 0 0 var(--color-ink-950);
+
+  --animate-drift: drift 18s ease-in-out infinite;
+  --animate-pulse-slow: pulse-slow 3s ease-in-out infinite;
+  --animate-dash: dash 2.4s linear infinite;
+  --animate-rise: rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-wiggle: wiggle 6s ease-in-out infinite;
+}
+
+@keyframes drift {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(12px, -14px) rotate(2deg); }
+}
+@keyframes pulse-slow {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+@keyframes dash {
+  to { stroke-dashoffset: -48; }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes wiggle {
+  0%, 100% { transform: rotate(-1.5deg); }
+  50% { transform: rotate(1.5deg); }
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  margin: 0;
+  background: var(--color-paper-50);
+  color: var(--color-slate-950);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--color-lime);
+  color: var(--color-ink-950);
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-ink-700);
+  border-radius: 999px;
+  border: 2px solid var(--color-paper-50);
+}
+
+/* halftone dot texture — the brutalist/pop-art background, not a soft dark grid */
+.bg-grid {
+  background-image: radial-gradient(rgba(14,14,16,0.16) 1.6px, transparent 1.6px);
+  background-size: 20px 20px;
+}
+
+.bg-dot {
+  background-image: radial-gradient(rgba(14,14,16,0.14) 1.4px, transparent 1.4px);
+  background-size: 16px 16px;
+}
+
+.text-gradient {
+  background: linear-gradient(95deg, #2b52ff 0%, #7c3aed 55%, #ff5a36 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* the brutalist panel: solid paper fill, thick ink border, hard offset shadow — no blur, no gradient glass */
+.brut-panel {
+  background: var(--color-paper);
+  border: 2px solid var(--color-ink-950);
+  box-shadow: var(--shadow-brut);
+}
+
+.font-display {
+  font-family: var(--font-display);
+}
+.font-shout {
+  font-family: var(--font-shout);
+}
+.font-mono {
+  font-family: var(--font-mono);
+}
