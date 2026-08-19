@@ -3,7 +3,7 @@
 LLM_PROVIDER=mock      -> deterministic, zero-cost, no API key required (smoke tests / CI / eval dry-runs)
 LLM_PROVIDER=openai    -> gpt-4o-mini (or configured model) via function calling
 LLM_PROVIDER=anthropic -> claude-sonnet-5 (or configured model) via tool use
-LLM_PROVIDER=gemini    -> gemini-3.6-flash (or configured model) via function calling, free tier
+LLM_PROVIDER=gemini    -> gemini-3.5-flash-lite (or configured model) via function calling, free tier
                           (Google AI Studio, https://aistudio.google.com/apikey - no cost, rate-limited)
 
 All providers implement the same three operations: generate_sql, back_translate, judge_alignment.
@@ -252,6 +252,29 @@ class AnthropicClient(LLMClient):
         return "".join(b.text for b in resp.content if b.type == "text").strip()
 
 
+def _call_with_retry(fn, attempts: int = 3, base_delay: float = 5.0):
+    """Retries a Gemini call on transient failures (deadline/timeout,
+    rate-limiting) with exponential backoff. The free tier is prone to both
+    under any sustained request volume (e.g. running the eval suite), and a
+    single failed call shouldn't be indistinguishable from a real generation
+    error."""
+    import time as _time
+
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            last_error = e
+            transient = any(
+                s in str(e) for s in ("DEADLINE_EXCEEDED", "ResourceExhausted", "429", "503", "UNAVAILABLE")
+            )
+            if not transient or attempt == attempts - 1:
+                raise
+            _time.sleep(base_delay * (2 ** attempt))
+    raise last_error
+
+
 def _proto_to_python(value):
     """Recursively unwrap google.ai.generativelanguage proto Map/Repeated
     composites into plain dict/list/scalars so pydantic can validate them."""
@@ -303,10 +326,11 @@ class GeminiClient(LLMClient):
         prompt = build_generation_prompt(
             question, schema, variant=variant, error_context=error_context, prior_sql=prior_sql,
         )
-        resp = self.model.generate_content(
+        resp = _call_with_retry(lambda: self.model.generate_content(
             prompt,
             tool_config={"function_calling_config": {"mode": "ANY", "allowed_function_names": ["generate_sql"]}},
-        )
+            request_options={"timeout": 120},
+        ))
         for part in resp.candidates[0].content.parts:
             if part.function_call and part.function_call.name == "generate_sql":
                 args = _proto_to_python(part.function_call.args)
@@ -315,12 +339,16 @@ class GeminiClient(LLMClient):
 
     def back_translate(self, sql: str) -> str:
         prompt = build_back_translation_prompt(sql)
-        resp = self.model.generate_content(prompt, tool_config={"function_calling_config": {"mode": "NONE"}})
+        resp = _call_with_retry(lambda: self.model.generate_content(
+            prompt, tool_config={"function_calling_config": {"mode": "NONE"}}, request_options={"timeout": 120},
+        ))
         return resp.text.strip()
 
     def explain_sql(self, sql: str, schema: dict) -> str:
         prompt = build_explain_prompt(sql, schema)
-        resp = self.model.generate_content(prompt, tool_config={"function_calling_config": {"mode": "NONE"}})
+        resp = _call_with_retry(lambda: self.model.generate_content(
+            prompt, tool_config={"function_calling_config": {"mode": "NONE"}}, request_options={"timeout": 120},
+        ))
         return resp.text.strip()
 
 

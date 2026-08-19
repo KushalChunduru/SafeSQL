@@ -38,7 +38,8 @@ def execute_query(
     schema = get_schema(engine)
 
     if allow_clarification and not force_interpretation:
-        term = build_ambiguity_check(question)
+        filtered_schema_for_check = build_filtered_schema(question, schema)
+        term = build_ambiguity_check(question, filtered_schema_for_check)
         if term:
             interpretations = [Interpretation(**i) for i in AMBIGUOUS_TERMS[term]]
             response = QueryResponse(

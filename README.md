@@ -35,19 +35,22 @@ that mutates data is not.
 
 ---
 
-## Headline numbers (smoke-test run, `LLM_PROVIDER=mock`)
+## Headline numbers (live run, `LLM_PROVIDER=gemini`, `gemini-3.5-flash-lite`)
 
-> These numbers come from the deterministic **mock** LLM provider (no API key, zero cost) — it only
-> exists to exercise the full pipeline end-to-end in CI/dev. It is **not** a text-to-SQL model, so
-> SQL-exact/execution-match numbers below are a floor, not a ceiling. Run `python eval/run_eval.py`
-> with `LLM_PROVIDER=openai`, `anthropic`, or `gemini` and a real key for representative accuracy —
-> see [Evaluation](#evaluation).
+> These numbers are from a real model (Gemini's free tier), not the zero-cost mock provider used for
+> pipeline smoke-testing during development. Safety numbers (guardrail effectiveness, ambiguity
+> detection) are provider-independent — they're enforced by deterministic code, not the LLM, and are
+> the same with any provider including the mock one. Accuracy numbers (SQL exact/execution match)
+> will vary by provider and model; re-run `python eval/run_eval.py` after switching `LLM_PROVIDER` to
+> get numbers for your own setup — see [Evaluation](#evaluation).
 
 | Metric | Result |
 |---|---|
 | Guardrail effectiveness | **8 / 8 (100%)** dangerous queries blocked — DROP, DELETE, UPDATE, INSERT, ALTER, TRUNCATE, stacked statements, over-deep subqueries |
 | Unsafe queries ever executed | **0** |
 | Ambiguity detection | **4 / 4 (100%)** — underspecified terms like "revenue" trigger clarification instead of a guessed answer |
+| Unanswerable-question hallucination avoidance | **4 / 4 (100%)** — out-of-schema questions correctly refused (empty-SQL guardrail block) rather than answered with fabricated data |
+| Execution accuracy | **22 / 34 (64.7%)** — generated SQL produces results matching the golden query, regardless of exact SQL phrasing |
 | Golden evaluation cases | 42 (simple / joins / aggregates / date filters / ambiguous / unanswerable) |
 
 Full breakdown: [`eval/eval_report.md`](eval/eval_report.md).
@@ -147,10 +150,19 @@ about "it's just a follow-up" skips a safety check.
 
 ## Domain
 
-An e-commerce analytics schema: `customers`, `categories`, `products`, `orders`, `order_items`,
-`reviews`. Seeded deterministically with Faker (~500 customers, 200 products, 2,000 orders, ~6,000
-order line items, 1,500 reviews). `revenue` is deliberately ambiguous (gross vs. net) to exercise
-the clarification flow.
+An e-commerce analytics schema is the **seeded demo default** — `customers`, `categories`,
+`products`, `orders`, `order_items`, `reviews` — deterministically populated with Faker (~500
+customers, 200 products, 2,000 orders, ~6,000 order line items, 1,500 reviews). `revenue` is
+deliberately ambiguous (gross vs. net) there to exercise the clarification flow.
+
+It's a default, not a restriction. `POST /v1/query` accepts any free-text question against whatever
+is actually in the database — the 42 questions in `eval/golden_queries.json` are a CI regression
+suite scoped to this demo schema, not a runtime allowlist. Import an unrelated dataset via
+`POST /v1/datasets/import` and ask it anything: schema-relevance filtering
+(`app/schema_filter.py`) scopes the prompt to the tables that are actually relevant, few-shot
+examples and the ambiguity glossary are only applied when the seeded e-commerce tables are actually
+part of that filtered schema (`app/prompts.py`), and every guardrail, sandboxing, and
+hallucination-detection layer above applies identically regardless of which dataset is active.
 
 ---
 
@@ -275,7 +287,7 @@ ANTHROPIC_MODEL=claude-sonnet-5
 ```env
 LLM_PROVIDER=gemini                 # $0 cost — aistudio.google.com/apikey
 GEMINI_API_KEY=AIza...
-GEMINI_MODEL=gemini-3.6-flash
+GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
 Other tunables live in `.env.example` — guardrail limits, `ENABLE_SELF_CORRECTION` /

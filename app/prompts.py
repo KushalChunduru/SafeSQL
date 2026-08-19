@@ -1,6 +1,15 @@
 """Dynamic prompt construction: filtered schema + FK relationships + sample
-values + business glossary + few-shot examples, assembled per question."""
+values + business glossary + few-shot examples, assembled per question.
+
+Domain-conditional by design: the hardcoded e-commerce few-shot examples and
+ambiguity glossary below only apply when the seeded e-commerce tables are
+actually present in the schema being prompted against. Any other dataset
+(imported via /v1/datasets/import) gets schema-derived examples instead and
+is never told about e-commerce interpretations that don't exist for it.
+"""
 import re
+
+from app.datasets import BASE_TABLES
 
 FEW_SHOT_EXAMPLES = [
     {
@@ -98,6 +107,32 @@ def _format_few_shot(examples: list) -> str:
     return "\n\n".join(blocks)
 
 
+def _synthesize_generic_examples(schema: dict, limit: int = 2) -> list:
+    """Fallback few-shot examples for schemas that aren't the seeded
+    e-commerce domain (e.g. an imported dataset) — built from the real
+    table names actually present so the prompt never claims something false."""
+    examples = []
+    for name in list(schema.keys())[:limit]:
+        examples.append({
+            "question": f"How many rows are in {name}?",
+            "sql": f"SELECT COUNT(*) AS row_count FROM {name};",
+        })
+        examples.append({
+            "question": f"Show me the first 10 rows of {name}.",
+            "sql": f"SELECT * FROM {name} LIMIT 10;",
+        })
+    return examples
+
+
+def _few_shot_block(schema: dict) -> tuple[str, str]:
+    """Returns (label, formatted_examples). Uses the curated e-commerce
+    examples only when the schema actually contains e-commerce tables;
+    otherwise synthesizes examples from whatever tables are really there."""
+    if set(schema.keys()) & BASE_TABLES:
+        return "EXAMPLES FOR THIS SCHEMA", _format_few_shot(FEW_SHOT_EXAMPLES)
+    return "EXAMPLE QUERY PATTERNS (schema-derived)", _format_few_shot(_synthesize_generic_examples(schema))
+
+
 SYSTEM_PROMPT = """You are SafeSQL, an expert SQL analyst. You translate natural-language \
 business questions into a single read-only SQL SELECT statement against the given schema.
 
@@ -123,7 +158,7 @@ def build_generation_prompt(
     prior_sql: str | None = None,
 ) -> str:
     schema_block = _format_schema_block(schema)
-    few_shot = _format_few_shot(FEW_SHOT_EXAMPLES)
+    few_shot_label, few_shot = _few_shot_block(schema)
     variant_hint = ""
     if variant == "alternate":
         variant_hint = (
@@ -154,7 +189,7 @@ applies rather than starting over.
 SCHEMA:
 {schema_block}
 
-EXAMPLES FOR THIS SCHEMA:
+{few_shot_label}:
 {few_shot}
 {variant_hint}{context_block}
 QUESTION: {question}
@@ -190,7 +225,15 @@ what it means for the business question instead."""
 QUALIFIERS = ("net", "gross")
 
 
-def build_ambiguity_check(question: str) -> str | None:
+def build_ambiguity_check(question: str, schema: dict) -> str | None:
+    """Only flags ambiguity for terms whose interpretations are grounded in
+    the seeded e-commerce schema (order_items-based gross/net revenue etc).
+    Against an unrelated imported dataset, those interpretations don't exist,
+    so the check is skipped entirely rather than offering a nonsensical
+    clarification."""
+    if not (set(schema.keys()) & BASE_TABLES):
+        return None
+
     q_lower = question.lower()
     for term, interpretations in AMBIGUOUS_TERMS.items():
         if term not in q_lower:

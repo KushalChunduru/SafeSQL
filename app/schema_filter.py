@@ -31,22 +31,40 @@ def _table_text_blob(table_name: str, table_info) -> str:
     return " ".join(parts)
 
 
-def filter_relevant_tables(question: str, schema: dict, top_k: int = 4, min_score: float = 15.0) -> list:
+def filter_relevant_tables(
+    question: str, schema: dict, top_k: int = 4, min_score: float = 15.0, relative_margin: float = 0.5
+) -> list:
     """Returns table names sorted by relevance, always including FK-linked
-    neighbors of any selected table so joins remain possible."""
+    neighbors of any selected table so joins remain possible.
+
+    Scoring compares stopword-filtered tokens on both sides (not raw
+    sentences) — comparing full sentences against a blob padded with sample
+    values compresses the gap between genuinely relevant and merely
+    coincidentally-similar tables, which is what let an unrelated imported
+    dataset's question end up pulling in the entire (densely FK-connected)
+    base schema. The relative_margin gate (only tables scoring within a
+    fraction of the top match qualify) is what actually prevents that: a
+    table that's just noise relative to a clear match gets excluded before
+    it can seed the FK-neighbor expansion below.
+    """
+    q_tokens = _tokenize(question)
+    q_clean = " ".join(sorted(q_tokens))
+
     scored = []
     for name, info in schema.items():
         blob = _table_text_blob(name, info)
-        score = fuzz.token_set_ratio(question.lower(), blob.lower())
+        blob_clean = " ".join(sorted(_tokenize(blob)))
+        score = fuzz.token_set_ratio(q_clean, blob_clean)
         # boost exact table/column name mentions
-        q_tokens = _tokenize(question)
         name_tokens = _tokenize(name) | {c.name.lower() for c in info.columns}
         if q_tokens & name_tokens:
             score += 25
         scored.append((name, score))
 
     scored.sort(key=lambda x: x[1], reverse=True)
-    selected = [n for n, s in scored[:top_k] if s >= min_score]
+    top_score = scored[0][1] if scored else 0
+    threshold = max(min_score, top_score * relative_margin)
+    selected = [n for n, s in scored[:top_k] if s >= threshold]
     if not selected:
         selected = [scored[0][0]] if scored else list(schema.keys())
 

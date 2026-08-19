@@ -18,7 +18,11 @@ import { api } from "../api/client";
 import { getSessionId } from "../lib/session";
 import type { QueryResponse } from "../types";
 
-const EXAMPLES = [
+// Curated for the seeded e-commerce demo. Not a restriction — any free-text
+// question works against whatever's actually in the database; these are just
+// good starting points. If datasets have been imported, dynamically-generated
+// suggestions for them are prepended below (see the useEffect in Workspace).
+const BASE_EXAMPLES = [
   "What are the top 5 best-selling products by quantity?",
   "What is the net revenue by month for delivered orders?",
   "Which customers have never placed an order?",
@@ -39,8 +43,25 @@ export default function Workspace() {
   const [explainLoading, setExplainLoading] = useState(false);
   const [refinement, setRefinement] = useState("");
   const [refining, setRefining] = useState(false);
+  const [examples, setExamples] = useState<string[]>(BASE_EXAMPLES);
   const sessionId = getSessionId();
   const [searchParams] = useSearchParams();
+
+  useEffect(() => {
+    api
+      .listDatasets()
+      .then((datasets) => {
+        if (datasets.length === 0) return;
+        const dynamic = datasets.slice(0, 3).flatMap((d) => [
+          `How many rows are in ${d.table_name}?`,
+          `Show me the first 10 rows of ${d.table_name}.`,
+        ]);
+        setExamples([...dynamic, ...BASE_EXAMPLES]);
+      })
+      .catch(() => {
+        /* fall back to the static examples */
+      });
+  }, []);
 
   function resetPerQueryState() {
     setFeedbackSent(null);
@@ -160,7 +181,7 @@ export default function Workspace() {
             </Button>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
-            {EXAMPLES.map((ex) => (
+            {examples.map((ex) => (
               <button
                 key={ex}
                 onClick={() => ask(ex)}

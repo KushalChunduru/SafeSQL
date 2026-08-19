@@ -15,10 +15,12 @@ Writes eval/eval_report.md and prints a summary to stdout.
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app.config import get_settings
 from app.db import get_reader_engine
 from app.guardrails import apply_guardrails
 from app.main import run_query
@@ -29,6 +31,13 @@ from app.validation import results_agree
 GOLDEN_PATH = Path(__file__).resolve().parent / "golden_queries.json"
 REPORT_PATH = Path(__file__).resolve().parent / "eval_report.md"
 
+# Real providers (especially free tiers) get rate-limited under the burst of
+# requests a full eval run generates - each case can be up to 3 sequential
+# LLM calls (primary + alternate + back-translation), sometimes more with
+# self-correction retries. A small pause between cases keeps the run well
+# under free-tier throughput limits; the mock provider needs none of this.
+INTER_CASE_DELAY_SECONDS = 4.0
+
 
 def normalize_sql(sql: str) -> str:
     sql = re.sub(r"\s+", " ", sql.strip().rstrip(";"))
@@ -38,11 +47,15 @@ def normalize_sql(sql: str) -> str:
 def eval_golden_queries(golden: list) -> dict:
     engine = get_reader_engine()
     results = []
+    delay = INTER_CASE_DELAY_SECONDS if get_settings().llm_provider != "mock" else 0
 
-    for case in golden:
+    for i, case in enumerate(golden):
+        if delay and i > 0:
+            time.sleep(delay)
         req = QueryRequest(question=case["question"], session_id="eval")
         resp = run_query(req)
         status = resp.status
+        print(f"  [{i + 1}/{len(golden)}] {case['id']}: {status}", flush=True)
 
         sql_exact_match = False
         execution_match = None
@@ -60,9 +73,16 @@ def eval_golden_queries(golden: list) -> dict:
         if case["category"] == "ambiguous":
             hallucination_avoided = status == "needs_clarification"
         elif case["category"] == "unanswerable":
-            # We don't have ground-truth schema-absence detection in the mock
-            # pipeline; use low confidence as a proxy for appropriate uncertainty.
-            hallucination_avoided = (confidence is not None and confidence < 0.5) or status in ("error", "needs_clarification")
+            # We don't have ground-truth schema-absence detection, so treat any
+            # outcome that stops short of confidently returning fabricated rows
+            # as success: low confidence, a clarification request, an execution
+            # error, or a guardrail block (e.g. the model correctly declines to
+            # invent SQL and returns nothing, which fails the "must be exactly
+            # one statement" check - a real observed Gemini behavior, not a
+            # hypothetical).
+            hallucination_avoided = (confidence is not None and confidence < 0.5) or status in (
+                "error", "needs_clarification", "blocked",
+            )
 
         results.append({
             "id": case["id"],
@@ -112,9 +132,18 @@ def summarize(golden_results: list, guardrail_results: list) -> str:
     unans_correct = sum(1 for r in unanswerable_cases if r["hallucination_avoided"])
     guardrail_blocked = sum(1 for r in guardrail_results if r["blocked"])
 
+    provider = get_settings().llm_provider
+    model_attr = {
+        "openai": "openai_model", "anthropic": "anthropic_model", "gemini": "gemini_model",
+    }.get(provider)
+    model = getattr(get_settings(), model_attr) if model_attr else "n/a"
+
     lines = []
     lines.append("# SafeSQL Evaluation Report\n")
-    lines.append(f"Golden query cases: **{n}**  |  Adversarial guardrail cases: **{len(guardrail_results)}**\n")
+    lines.append(
+        f"Golden query cases: **{n}**  |  Adversarial guardrail cases: **{len(guardrail_results)}**  |  "
+        f"Provider: **{provider}**{f' ({model})' if model_attr else ''}\n"
+    )
     lines.append("## Headline numbers\n")
     lines.append(f"- **SQL exact match**: {sql_exact}/{len(ok_cases)} ({pct(sql_exact, len(ok_cases))})")
     lines.append(f"- **Execution accuracy** (results match golden, any SQL shape): {exec_match}/{exec_denom} ({pct(exec_match, exec_denom)})")
@@ -122,10 +151,15 @@ def summarize(golden_results: list, guardrail_results: list) -> str:
     lines.append(f"- **Unanswerable-question hallucination avoidance**: {unans_correct}/{len(unanswerable_cases)} ({pct(unans_correct, len(unanswerable_cases))})")
     lines.append(f"- **Guardrail effectiveness**: {guardrail_blocked}/{len(guardrail_results)} ({pct(guardrail_blocked, len(guardrail_results))}) dangerous queries blocked, **zero** executed against the database")
     lines.append("")
-    lines.append("> Note: with `LLM_PROVIDER=mock` (no API key configured), SQL exact/execution match will "
-                 "be low outside the few-shot-matched cases by design — the mock provider is a deterministic "
-                 "smoke-test stand-in, not a real text-to-SQL model. Re-run with `LLM_PROVIDER=openai` or "
-                 "`anthropic` and a valid key for representative accuracy numbers.\n")
+    if provider == "mock":
+        lines.append("> Note: this run used the deterministic **mock** LLM provider (no API key, zero cost) — it "
+                     "only exists to exercise the full pipeline end-to-end in CI/dev. SQL exact/execution match "
+                     "will be low outside the few-shot-matched cases by design; it is not a real text-to-SQL "
+                     "model. Re-run with `LLM_PROVIDER=openai`, `anthropic`, or `gemini` and a valid key for "
+                     "representative accuracy numbers.\n")
+    else:
+        lines.append(f"> Note: this run used `LLM_PROVIDER={provider}` (model: `{model}`) — a real text-to-SQL "
+                     "model, not the zero-cost mock stand-in. These are representative accuracy numbers.\n")
 
     lines.append("## By category\n")
     lines.append("| id | category | expected | actual | sql_exact | exec_match | confidence |")

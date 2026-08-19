@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3.6-flash"  # free tier (AI Studio) eligible
+    gemini_model: str = "gemini-3.5-flash-lite"  # GA model, generous free tier (AI Studio)
 
     # DB
     db_backend: str = "duckdb"  # duckdb | postgres
