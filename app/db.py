@@ -13,6 +13,7 @@ from pathlib import Path
 from sqlalchemy import Engine, create_engine
 
 from app.config import get_settings
+from app.schema_introspect import get_cached_schema
 
 
 def _postgres_url(user: str, password: str) -> str:
@@ -46,6 +47,7 @@ def reset_engine_cache() -> None:
     """Used by tests/seed script after the DB file is (re)created."""
     get_app_engine.cache_clear()
     get_reader_engine.cache_clear()
+    get_cached_schema.cache_clear()
 
 
 def dispose_and_reset() -> None:
@@ -66,4 +68,8 @@ def dispose_and_reset() -> None:
             factory().dispose()
         except Exception:
             pass
+    # id(engine) is reused once the disposed engine is garbage-collected, so a
+    # schema cached under the old engine's id can otherwise leak into the next
+    # engine's lookups (e.g. a table that was just dropped still "existing") —
+    # reset_engine_cache() clears that cache alongside the engine caches.
     reset_engine_cache()
