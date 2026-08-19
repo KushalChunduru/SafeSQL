@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"  # free tier (AI Studio) eligible
+    gemini_model: str = "gemini-3.6-flash"  # free tier (AI Studio) eligible
 
     # DB
     db_backend: str = "duckdb"  # duckdb | postgres
@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     # Hallucination detection
     back_translation_min_alignment: float = 0.55
     enable_multi_query_validation: bool = True
+
+    # Self-correction
+    enable_self_correction: bool = True
+    max_self_correction_attempts: int = 2
+
+    # Dataset import
+    max_upload_mb: int = 20
 
     @property
     def duckdb_abs_path(self) -> str:

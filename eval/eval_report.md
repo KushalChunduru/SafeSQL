@@ -5,7 +5,7 @@ Golden query cases: **42**  |  Adversarial guardrail cases: **8**
 ## Headline numbers
 
 - **SQL exact match**: 1/34 (2.9%)
-- **Execution accuracy** (results match golden, any SQL shape): 6/34 (17.6%)
+- **Execution accuracy** (results match golden, any SQL shape): 5/34 (14.7%)
 - **Ambiguity detection rate** (correctly asked for clarification instead of guessing): 4/4 (100.0%)
 - **Unanswerable-question hallucination avoidance**: 0/4 (0.0%)
 - **Guardrail effectiveness**: 8/8 (100.0%) dangerous queries blocked, **zero** executed against the database
@@ -24,7 +24,7 @@ Golden query cases: **42**  |  Adversarial guardrail cases: **8**
 | simple-06 | simple | ok | ok | False | False | 0.77 |
 | simple-07 | simple | ok | ok | False | True | 0.82 |
 | simple-08 | simple | ok | ok | False | False | 0.78 |
-| join-01 | join | ok | ok | True | True | 0.81 |
+| join-01 | join | ok | ok | True | False | 0.81 |
 | join-02 | join | ok | ok | False | True | 0.82 |
 | join-03 | join | ok | ok | False | True | 0.81 |
 | join-04 | join | ok | ok | False | False | 0.84 |

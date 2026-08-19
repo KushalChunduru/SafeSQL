@@ -249,7 +249,7 @@ ANTHROPIC_MODEL=claude-sonnet-5
 ```env
 LLM_PROVIDER=gemini                 # $0 cost — aistudio.google.com/apikey
 GEMINI_API_KEY=AIza...
-GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MODEL=gemini-3.6-flash
 ```
 
 **Frontend — React app (primary UI):**

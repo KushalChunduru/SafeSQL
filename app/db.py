@@ -46,3 +46,24 @@ def reset_engine_cache() -> None:
     """Used by tests/seed script after the DB file is (re)created."""
     get_app_engine.cache_clear()
     get_reader_engine.cache_clear()
+
+
+def dispose_and_reset() -> None:
+    """Closes any pooled connections on both engines and clears the cache so
+    the next call opens fresh ones.
+
+    DuckDB requires exclusive access for a read-write connection and won't
+    open one while another connection (even read-only) already has the file
+    open. Since get_reader_engine() is cached and its pooled connection can
+    stay open between requests, a dataset import must call this immediately
+    before opening a write connection, and again afterward so subsequent
+    requests get a reader engine that sees the newly-imported table. This is
+    a single-process assumption — fine for this project's dev/demo scope, not
+    a substitute for real concurrent-write handling under load.
+    """
+    for factory in (get_app_engine, get_reader_engine):
+        try:
+            factory().dispose()
+        except Exception:
+            pass
+    reset_engine_cache()

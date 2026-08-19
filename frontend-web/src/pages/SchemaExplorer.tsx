@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import { Database, KeyRound, Link2, Loader2, XCircle } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Database, KeyRound, Link2, Loader2, XCircle, Upload, CheckCircle2 } from "lucide-react";
 import PageShell from "../components/layout/PageShell";
 import Card from "../components/ui/Card";
 import Badge from "../components/ui/Badge";
+import Button from "../components/ui/Button";
 import { api } from "../api/client";
-import type { SchemaDict } from "../types";
+import type { DatasetInfo, SchemaDict } from "../types";
 
 const CANVAS_W = 1000;
 const CANVAS_H = 620;
@@ -27,8 +28,13 @@ export default function SchemaExplorer() {
   const [schema, setSchema] = useState<SchemaDict | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [datasets, setDatasets] = useState<DatasetInfo[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
+  function loadSchemaAndDatasets() {
     api
       .schema()
       .then((s) => {
@@ -36,7 +42,32 @@ export default function SchemaExplorer() {
         setSelected((prev) => prev ?? Object.keys(s)[0] ?? null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load schema"));
+    api.listDatasets().then(setDatasets).catch(() => {});
+  }
+
+  useEffect(() => {
+    loadSchemaAndDatasets();
   }, []);
+
+  async function handleFileSelected(file: File | undefined) {
+    if (!file) return;
+    setImporting(true);
+    setImportError(null);
+    setImportSuccess(null);
+    try {
+      const result = await api.importDataset(file);
+      setImportSuccess(`Imported "${result.table_name}" — ${result.row_count} rows.`);
+      loadSchemaAndDatasets();
+      setSelected(result.table_name);
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : "Import failed.");
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  const importedTableNames = useMemo(() => new Set(datasets.map((d) => d.table_name)), [datasets]);
 
   const tableNames = useMemo(() => (schema ? Object.keys(schema) : []), [schema]);
   const positions = useMemo(() => layout(tableNames), [tableNames]);
@@ -72,6 +103,60 @@ export default function SchemaExplorer() {
           Every table SafeSQL is allowed to query — live from <code className="font-mono text-xs">GET /v1/schema</code>.
           Click a table to see its columns, keys, and sample values.
         </p>
+
+        <Card className="mt-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Upload size={16} className="text-cyan-glow" />
+              <div>
+                <span className="text-sm font-semibold text-slate-950">Import your own data</span>
+                <p className="text-xs text-slate-500">
+                  CSV or Excel — loaded as a new table, queryable through the exact same guardrails.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,.xlsx,.xls"
+                className="hidden"
+                onChange={(e) => handleFileSelected(e.target.files?.[0])}
+              />
+              <Button
+                variant="outline"
+                className="text-sm"
+                disabled={importing}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {importing ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                {importing ? "Importing…" : "Choose file"}
+              </Button>
+            </div>
+          </div>
+          {importSuccess && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg bg-mint/10 p-2.5 text-xs text-mint">
+              <CheckCircle2 size={13} /> {importSuccess}
+            </div>
+          )}
+          {importError && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg bg-rose/10 p-2.5 text-xs text-rose">
+              <XCircle size={13} /> {importError}
+            </div>
+          )}
+          {datasets.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {datasets.map((d) => (
+                <span
+                  key={d.table_name}
+                  className="rounded-lg border-2 border-ink-950 bg-paper-100 px-2.5 py-1 font-mono text-xs text-slate-700"
+                >
+                  {d.table_name} ({d.row_count} rows)
+                </span>
+              ))}
+            </div>
+          )}
+        </Card>
 
         {error && (
           <Card className="mt-6 border-rose/30">
@@ -137,13 +222,14 @@ export default function SchemaExplorer() {
                         fill="#0e1420"
                         stroke={isSelected ? "#67e8f9" : "#3a4863"}
                         strokeWidth={isSelected ? 2 : 1.3}
+                        strokeDasharray={importedTableNames.has(name) ? "5 4" : undefined}
                         className="transition-all duration-300"
                       />
                       <text x={0} y={-4} textAnchor="middle" fill="#eef2f8" fontSize="13.5" fontFamily="Space Grotesk, sans-serif" fontWeight={600}>
                         {name}
                       </text>
                       <text x={0} y={14} textAnchor="middle" fill="#7c88a1" fontSize="10" fontFamily="Inter, sans-serif">
-                        {info.columns.length} columns
+                        {info.columns.length} columns{importedTableNames.has(name) ? " · imported" : ""}
                       </text>
                     </g>
                   );

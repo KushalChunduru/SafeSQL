@@ -1,6 +1,9 @@
+import { useEffect, useState } from "react";
 import { NavLink } from "react-router-dom";
 import clsx from "clsx";
+import { Cpu } from "lucide-react";
 import ShieldMark from "../illustrations/ShieldMark";
+import { api } from "../../api/client";
 
 const LINKS = [
   { to: "/", label: "Home", end: true },
@@ -11,15 +14,31 @@ const LINKS = [
 ];
 
 export default function NavBar() {
+  const [providerLabel, setProviderLabel] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .providers()
+      .then((p) => setProviderLabel(p.active_provider))
+      .catch(() => {});
+  }, []);
+
   return (
     <header className="sticky top-0 z-50 border-b-2 border-ink-950 bg-ink-950">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3.5">
-        <NavLink to="/" className="flex items-center gap-2.5">
-          <ShieldMark size={26} />
-          <span className="font-display text-lg font-extrabold tracking-tight text-mist-100">
-            SafeSQL
-          </span>
-        </NavLink>
+        <div className="flex items-center gap-3">
+          <NavLink to="/" className="flex items-center gap-2.5">
+            <ShieldMark size={26} />
+            <span className="font-display text-lg font-extrabold tracking-tight text-mist-100">
+              SafeSQL
+            </span>
+          </NavLink>
+          {providerLabel && (
+            <span className="hidden items-center gap-1.5 rounded-full border-2 border-ink-700 bg-ink-900 px-2.5 py-1 font-mono text-[11px] font-semibold text-mist-300 sm:flex">
+              <Cpu size={11} /> {providerLabel}
+            </span>
+          )}
+        </div>
 
         <nav className="hidden items-center gap-1 rounded-full border-2 border-ink-700 bg-ink-900 p-1 md:flex">
           {LINKS.map((l) => (

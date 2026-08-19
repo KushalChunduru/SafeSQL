@@ -115,7 +115,13 @@ clearly an aggregate.
 """
 
 
-def build_generation_prompt(question: str, schema: dict, variant: str = "primary") -> str:
+def build_generation_prompt(
+    question: str,
+    schema: dict,
+    variant: str = "primary",
+    error_context: dict | None = None,
+    prior_sql: str | None = None,
+) -> str:
     schema_block = _format_schema_block(schema)
     few_shot = _format_few_shot(FEW_SHOT_EXAMPLES)
     variant_hint = ""
@@ -126,6 +132,23 @@ def build_generation_prompt(question: str, schema: dict, variant: str = "primary
             "direct join, or a different aggregation path - while still correctly answering "
             "the question. This is used to cross-check correctness against a first attempt.\n"
         )
+
+    context_block = ""
+    if error_context:
+        context_block = f"""
+PREVIOUS ATTEMPT FAILED - fix the specific problem below, don't start over from scratch:
+Previous SQL: {error_context['previous_sql']}
+Database error: {error_context['error']}
+Produce a corrected query that avoids this exact error.
+"""
+    elif prior_sql:
+        context_block = f"""
+This is a FOLLOW-UP to a previous query. The user's previous SQL was:
+{prior_sql}
+Adjust that query to satisfy the new instruction below, reusing its structure where it still
+applies rather than starting over.
+"""
+
     return f"""{SYSTEM_PROMPT}
 
 SCHEMA:
@@ -133,7 +156,7 @@ SCHEMA:
 
 EXAMPLES FOR THIS SCHEMA:
 {few_shot}
-{variant_hint}
+{variant_hint}{context_block}
 QUESTION: {question}
 
 Respond using the generate_sql tool."""
@@ -146,6 +169,22 @@ def build_back_translation_prompt(sql: str) -> str:
 
 In one sentence, state precisely what business question this SQL query answers. \
 Be specific about filters, grouping, and aggregation - don't just restate the table names."""
+
+
+def build_explain_prompt(sql: str, schema: dict) -> str:
+    schema_block = _format_schema_block(schema)
+    return f"""You are explaining a SQL query to a non-technical business stakeholder.
+
+SCHEMA:
+{schema_block}
+
+SQL QUERY:
+{sql}
+
+Write a clear, structured explanation in 3-5 sentences covering: which tables it reads from and
+how they're joined, what filters are applied, what aggregation or grouping happens (if any), and
+how the results are sorted or limited. Plain English, no SQL jargon like "GROUP BY" - describe
+what it means for the business question instead."""
 
 
 QUALIFIERS = ("net", "gross")

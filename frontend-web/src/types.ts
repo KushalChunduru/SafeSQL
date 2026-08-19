@@ -53,6 +53,11 @@ export interface ConfidenceBreakdown {
 
 export type QueryStatus = "ok" | "needs_clarification" | "blocked" | "error";
 
+export interface CorrectionAttempt {
+  sql: string;
+  error: string;
+}
+
 export interface QueryResponse {
   status: QueryStatus;
   question: string;
@@ -69,6 +74,9 @@ export interface QueryResponse {
   clarification: ClarificationNeeded | null;
   alternate_sql: string | null;
   alternate_agreement: boolean | null;
+  self_corrected: boolean;
+  correction_attempts: number;
+  correction_history: CorrectionAttempt[];
   error: string | null;
   query_id: string | null;
 }
@@ -90,5 +98,32 @@ export interface HistoryItem {
   status: string;
   confidence_overall: number | null;
   feedback: boolean | null;
+  favorite: boolean;
   timestamp: string;
+}
+
+export interface DatasetInfo {
+  table_name: string;
+  original_filename: string;
+  row_count: number;
+  columns: string[];
+  imported_at: string;
+}
+
+export interface DatasetImportResponse {
+  table_name: string;
+  row_count: number;
+  columns: string[];
+}
+
+export interface ProviderInfo {
+  active_provider: string;
+  active_model: string;
+  available_providers: string[];
+  configured: Record<string, boolean>;
+}
+
+export interface ExplainResponse {
+  sql: string;
+  explanation: string;
 }

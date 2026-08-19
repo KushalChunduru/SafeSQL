@@ -23,6 +23,7 @@ def record(session_id: str, question: str, response: QueryResponse) -> str:
         "status": response.status,
         "confidence_overall": response.confidence.overall if response.confidence else None,
         "feedback": None,
+        "favorite": False,
         "notes": "",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -37,10 +38,23 @@ def add_feedback(query_id: str, correct: bool, notes: str = "") -> bool:
     return True
 
 
-def get_history(session_id: str | None = None, limit: int = 50) -> list:
+def set_favorite(query_id: str, favorite: bool) -> bool:
+    if query_id not in _STORE:
+        return False
+    _STORE[query_id]["favorite"] = favorite
+    return True
+
+
+def get_entry(query_id: str) -> dict | None:
+    return _STORE.get(query_id)
+
+
+def get_history(session_id: str | None = None, limit: int = 50, favorites_only: bool = False) -> list:
     items = list(_STORE.values())
     if session_id:
         items = [i for i in items if i["session_id"] == session_id]
+    if favorites_only:
+        items = [i for i in items if i["favorite"]]
     items.sort(key=lambda i: i["timestamp"], reverse=True)
     return [HistoryItem(**{k: v for k, v in i.items() if k != "notes"}) for i in items[:limit]]
 

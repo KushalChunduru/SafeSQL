@@ -55,6 +55,11 @@ class SanityFlag(BaseModel):
     message: str
 
 
+class CorrectionAttempt(BaseModel):
+    sql: str
+    error: str
+
+
 # ---------- API request/response ----------
 
 class QueryRequest(BaseModel):
@@ -80,6 +85,9 @@ class QueryResponse(BaseModel):
     clarification: Optional[ClarificationNeeded] = None
     alternate_sql: Optional[str] = None
     alternate_agreement: Optional[bool] = None
+    self_corrected: bool = False
+    correction_attempts: int = 0
+    correction_history: list[CorrectionAttempt] = Field(default_factory=list)
     error: Optional[str] = None
     query_id: Optional[str] = None
 
@@ -90,6 +98,25 @@ class FeedbackRequest(BaseModel):
     notes: str = ""
 
 
+class FavoriteRequest(BaseModel):
+    favorite: bool = True
+
+
+class RefineRequest(BaseModel):
+    query_id: str
+    refinement: str
+    session_id: str = "default"
+
+
+class ExplainRequest(BaseModel):
+    sql: str
+
+
+class ExplainResponse(BaseModel):
+    sql: str
+    explanation: str
+
+
 class HistoryItem(BaseModel):
     query_id: str
     session_id: str
@@ -98,4 +125,30 @@ class HistoryItem(BaseModel):
     status: str
     confidence_overall: Optional[float]
     feedback: Optional[bool] = None
+    favorite: bool = False
     timestamp: str
+
+
+# ---------- Datasets ----------
+
+class DatasetInfo(BaseModel):
+    table_name: str
+    original_filename: str
+    row_count: int
+    columns: list[str]
+    imported_at: str
+
+
+class DatasetImportResponse(BaseModel):
+    table_name: str
+    row_count: int
+    columns: list[str]
+
+
+# ---------- Providers ----------
+
+class ProviderInfo(BaseModel):
+    active_provider: str
+    active_model: str
+    available_providers: list[str]
+    configured: dict[str, bool]

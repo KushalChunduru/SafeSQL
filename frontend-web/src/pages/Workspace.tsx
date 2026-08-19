@@ -3,7 +3,8 @@ import { useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   Send, Loader2, ShieldAlert, AlertTriangle, CircleHelp, ThumbsUp, ThumbsDown,
-  Clock, Rows3, Sparkles, GitCompareArrows, CheckCircle2, XCircle,
+  Clock, Rows3, Sparkles, GitCompareArrows, CheckCircle2, XCircle, Wrench, MessageSquareText,
+  Star, Download, CornerDownRight,
 } from "lucide-react";
 import PageShell from "../components/layout/PageShell";
 import Card from "../components/ui/Card";
@@ -32,14 +33,28 @@ export default function Workspace() {
   const [response, setResponse] = useState<QueryResponse | null>(null);
   const [feedbackSent, setFeedbackSent] = useState<"up" | "down" | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [favorited, setFavorited] = useState(false);
+  const [showCorrections, setShowCorrections] = useState(false);
+  const [explainText, setExplainText] = useState<string | null>(null);
+  const [explainLoading, setExplainLoading] = useState(false);
+  const [refinement, setRefinement] = useState("");
+  const [refining, setRefining] = useState(false);
   const sessionId = getSessionId();
   const [searchParams] = useSearchParams();
+
+  function resetPerQueryState() {
+    setFeedbackSent(null);
+    setFavorited(false);
+    setShowCorrections(false);
+    setExplainText(null);
+    setRefinement("");
+  }
 
   async function ask(q: string, forceInterpretation?: string) {
     if (!q.trim()) return;
     setLoading(true);
     setErrorMsg(null);
-    setFeedbackSent(null);
+    resetPerQueryState();
     try {
       const resp = await api.runQuery({
         question: q,
@@ -52,6 +67,46 @@ export default function Workspace() {
       setErrorMsg(e instanceof Error ? e.message : "Request failed. Is the API running?");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function refine() {
+    if (!response?.query_id || !refinement.trim()) return;
+    setRefining(true);
+    setErrorMsg(null);
+    try {
+      const resp = await api.refineQuery(response.query_id, refinement.trim(), sessionId);
+      resetPerQueryState();
+      setResponse(resp);
+      setQuestion(resp.question);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : "Refinement failed.");
+    } finally {
+      setRefining(false);
+    }
+  }
+
+  async function explain() {
+    if (!response?.sql) return;
+    setExplainLoading(true);
+    try {
+      const resp = await api.explainSql(response.sql);
+      setExplainText(resp.explanation);
+    } catch (e) {
+      setExplainText(e instanceof Error ? `Explain failed: ${e.message}` : "Explain failed.");
+    } finally {
+      setExplainLoading(false);
+    }
+  }
+
+  async function toggleFavorite() {
+    if (!response?.query_id) return;
+    const next = !favorited;
+    setFavorited(next);
+    try {
+      await api.setFavorite(response.query_id, next);
+    } catch {
+      setFavorited(!next);
     }
   }
 
@@ -215,20 +270,51 @@ export default function Workspace() {
             <motion.div key="ok" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_320px]">
               <div className="min-w-0 space-y-6">
                 <Card>
-                  <div className="mb-3 flex items-center justify-between">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs uppercase tracking-wide text-slate-500">Generated SQL</span>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      {response.self_corrected && (
+                        <button onClick={() => setShowCorrections((v) => !v)}>
+                          <Badge tone="violet">
+                            <Wrench size={11} /> self-corrected ({response.correction_attempts})
+                          </Badge>
+                        </button>
+                      )}
                       {response.guardrail_warnings.length > 0 && (
                         <Badge tone="amber">
                           <AlertTriangle size={11} /> {response.guardrail_warnings.length} warning
                           {response.guardrail_warnings.length > 1 ? "s" : ""}
                         </Badge>
                       )}
+                      <Button variant="ghost" className="!px-2 !py-1 text-xs" onClick={explain} disabled={explainLoading}>
+                        {explainLoading ? <Loader2 size={13} className="animate-spin" /> : <MessageSquareText size={13} />}
+                        Explain
+                      </Button>
                     </div>
                   </div>
+
+                  {showCorrections && response.correction_history.length > 0 && (
+                    <div className="mb-3 space-y-2 rounded-xl border-2 border-ink-950 bg-paper-100 p-3">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-violet-glow">
+                        Correction history — earlier attempts that failed
+                      </span>
+                      {response.correction_history.map((c, i) => (
+                        <div key={i}>
+                          <CodeBlock code={c.sql} className="text-[11px]" />
+                          <p className="mt-1 text-xs text-rose">{c.error}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <CodeBlock code={response.sql ?? ""} />
                   {response.explanation && (
                     <p className="mt-3 text-sm italic text-slate-600">{response.explanation}</p>
+                  )}
+                  {explainText && (
+                    <div className="mt-3 rounded-xl border-2 border-ink-950 bg-[var(--color-lime)]/10 p-3 text-sm text-slate-700">
+                      {explainText}
+                    </div>
                   )}
                   {response.guardrail_warnings.map((w, i) => (
                     <div key={i} className="mt-2 flex items-start gap-2 rounded-lg bg-amber/10 p-2.5 text-xs text-amber">
@@ -276,14 +362,36 @@ export default function Workspace() {
                 )}
 
                 <Card>
-                  <div className="mb-3 flex items-center justify-between">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs uppercase tracking-wide text-slate-500">
                       Results — {response.row_count} row{response.row_count !== 1 ? "s" : ""}
                       {response.truncated ? " (truncated)" : ""}
                     </span>
-                    <span className="flex items-center gap-1.5 text-xs text-slate-500">
-                      <Clock size={12} /> {response.execution_time_ms?.toFixed(1)} ms
-                    </span>
+                    <div className="flex items-center gap-3">
+                      {response.query_id && response.rows.length > 0 && (
+                        <div className="flex items-center gap-1.5">
+                          <a
+                            href={api.exportUrl(response.query_id, "csv")}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1 rounded-lg border-2 border-ink-950 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-[var(--color-lime)]"
+                          >
+                            <Download size={11} /> CSV
+                          </a>
+                          <a
+                            href={api.exportUrl(response.query_id, "json")}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex items-center gap-1 rounded-lg border-2 border-ink-950 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-[var(--color-lime)]"
+                          >
+                            <Download size={11} /> JSON
+                          </a>
+                        </div>
+                      )}
+                      <span className="flex items-center gap-1.5 text-xs text-slate-500">
+                        <Clock size={12} /> {response.execution_time_ms?.toFixed(1)} ms
+                      </span>
+                    </div>
                   </div>
                   {response.rows.length === 0 ? (
                     <p className="py-6 text-center text-sm text-slate-500">Query returned no rows.</p>
@@ -327,11 +435,43 @@ export default function Workspace() {
                   >
                     <ThumbsDown size={14} />
                   </button>
+                  <button
+                    onClick={toggleFavorite}
+                    title="Favorite"
+                    className={`rounded-lg border p-2 transition ${favorited ? "border-amber bg-amber/15 text-amber" : "border-ink-600 text-slate-600 hover:text-amber hover:border-amber/40"}`}
+                  >
+                    <Star size={14} fill={favorited ? "currentColor" : "none"} />
+                  </button>
                   {feedbackSent && <span className="text-xs text-slate-500">Thanks — recorded.</span>}
                   <span className="ml-auto font-mono text-[10px] text-slate-400">
                     {response.query_id?.slice(0, 8)}
                   </span>
                 </div>
+
+                <Card>
+                  <span className="text-xs uppercase tracking-wide text-slate-500">Refine this query</span>
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                    <input
+                      value={refinement}
+                      onChange={(e) => setRefinement(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && refine()}
+                      placeholder="e.g. only show the top 3, or filter to last quarter"
+                      className="flex-1 rounded-xl border-2 border-ink-950 bg-paper px-3 py-2 text-sm text-slate-950 placeholder:text-slate-400 outline-none focus:bg-[var(--color-lime)]/10"
+                    />
+                    <Button
+                      variant="outline"
+                      onClick={refine}
+                      disabled={refining || !refinement.trim()}
+                      className="text-sm"
+                    >
+                      {refining ? <Loader2 size={14} className="animate-spin" /> : <CornerDownRight size={14} />}
+                      Refine
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    Follow-ups run through the same guardrails and hallucination checks as any new question.
+                  </p>
+                </Card>
               </div>
 
               {/* Sidebar: confidence breakdown */}
