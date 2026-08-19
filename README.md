@@ -27,6 +27,7 @@ that mutates data is not.
 - [Safety layers](#safety-layers-defense-in-depth)
 - [Hallucination detection](#hallucination-detection)
 - [Ambiguity handling](#ambiguity-handling)
+- [Productivity features](#productivity-features)
 - [Project layout](#project-layout)
 - [Getting started](#getting-started)
 - [API reference](#api-reference)
@@ -115,6 +116,7 @@ flowchart TD
     D --> E{"Guardrail middleware"}
     E -- "DDL/DML, multi-statement,<br/>over-deep subquery, oversized scan" --> E1["Blocked + logged<br/>never executes"]
     E -- SELECT / WITH, within limits --> F["Sandboxed execution<br/>read-only role + rolled-back transaction"]
+    F -. "execution error → feed DB error back to<br/>the LLM, retry (bounded, re-guarded)" .-> D
     F --> G1["Back-translation<br/>alignment scoring"]
     F --> G2["Result sanity checks<br/>nulls · ranges · sign checks"]
     F --> G3["Independent cross-check query<br/>alternate join/aggregation strategy"]
@@ -135,7 +137,11 @@ flowchart TD
 
 No question reaches the database directly. Every one passes through an ambiguity check, a
 schema-filtered prompt, guardrail middleware, and sandboxed execution, then three independent
-hallucination-detection signals before a confidence score is computed.
+hallucination-detection signals before a confidence score is computed. A query that fails at
+execution doesn't just error out — its DB error is fed back to the LLM for a bounded, fully
+re-guarded retry (see [Productivity features](#productivity-features)). A follow-up refinement
+(`POST /v1/query/refine`) re-enters this exact same pipeline with the prior SQL as context — nothing
+about "it's just a follow-up" skips a safety check.
 
 ---
 
@@ -185,6 +191,23 @@ itself ("net revenue") is *not* flagged. See `app/prompts.py::AMBIGUOUS_TERMS` /
 
 ---
 
+## Productivity features
+
+Everything below runs through the same guardrail and sandboxed-execution path as a brand-new
+question — none of it is a shortcut around safety.
+
+| Feature | How it works |
+|---|---|
+| **Self-correcting execution** | A guardrail-approved query that fails at execution has its DB error fed back to the LLM for a bounded number of retries (`ENABLE_SELF_CORRECTION`, `MAX_SELF_CORRECTION_ATTEMPTS`), each attempt re-validated through guardrails from scratch. The response reports `self_corrected`, `correction_attempts`, and the full `correction_history` of what failed and why. |
+| **CSV/Excel dataset import** | `POST /v1/datasets/import` loads a user-supplied file into the sandboxed database as a new table (`app/datasets.py`), immediately queryable under the exact same guardrails as the seeded schema. On DuckDB this works around the engine's single-writer file lock by disposing and rebuilding the read-only reader connection around the write (`app/db.py::dispose_and_reset`). |
+| **Iterative refinement** | `POST /v1/query/refine {query_id, refinement}` reuses a prior query's SQL as context for a follow-up instruction ("only the top 3") instead of starting over, via the same `app/pipeline.py::execute_query` the initial question used. |
+| **Query explanation** | `POST /v1/explain {sql}` explains an arbitrary or user-edited SQL string in plain English — useful for auditing a query before trusting it, independent of whether SafeSQL generated it. |
+| **Favorites** | `POST /v1/history/{query_id}/favorite` stars a history entry, independent of the correct/incorrect feedback flag; `GET /v1/history?favorites_only=true` filters to them. |
+| **Result export** | `GET /v1/query/{query_id}/export?format=csv|json` re-executes the stored SQL fresh (read-only, row-capped) and streams the result rather than caching a potentially large result set in memory. |
+| **Provider introspection** | `GET /v1/providers` reports the active LLM provider/model and which providers have a key configured — booleans only, never the key values. |
+
+---
+
 ## Project layout
 
 ```
@@ -200,11 +223,14 @@ app/
   sql_executor.py           sandboxed read-only execution
   validation.py             hallucination-detection signals
   confidence.py             combined confidence score
-  history.py                session history + feedback store
+  pipeline.py               shared question -> SQL -> validated-answer flow (self-correction loop; used by /v1/query and /v1/query/refine)
+  datasets.py                CSV/Excel dataset import
+  history.py                session history + feedback + favorites store
   main.py                   FastAPI app
 
-frontend-web/                React + TypeScript SPA: landing page, query workspace,
-                              live schema explorer, session history, safety dashboard
+frontend-web/                React + TypeScript SPA: landing page, query workspace (self-correction,
+                              explain, refine, export, favorites), live schema explorer + dataset
+                              import, session history, safety dashboard
 frontend/streamlit_app.py    lightweight alternate UI: NL input, editable SQL, results,
                               confidence breakdown, history, feedback
 
@@ -252,6 +278,9 @@ GEMINI_API_KEY=AIza...
 GEMINI_MODEL=gemini-3.6-flash
 ```
 
+Other tunables live in `.env.example` — guardrail limits, `ENABLE_SELF_CORRECTION` /
+`MAX_SELF_CORRECTION_ATTEMPTS`, and `MAX_UPLOAD_MB` for dataset imports.
+
 **Frontend — React app (primary UI):**
 
 ```bash
@@ -285,10 +314,17 @@ same SQLAlchemy engine abstraction (`app/db.py`).
 
 | Endpoint | Description |
 |---|---|
-| `POST /v1/query` | `{question, session_id?, force_interpretation?}` → SQL, explanation, results, confidence breakdown, guardrail warnings, or a clarification request |
-| `GET /v1/schema` | Introspected schema (tables, columns, types, FKs, sample values) |
-| `GET /v1/history?session_id=` | Past queries for a session |
+| `POST /v1/query` | `{question, session_id?, force_interpretation?}` → SQL, explanation, results, confidence breakdown, guardrail warnings, self-correction info, or a clarification request |
+| `POST /v1/query/refine` | `{query_id, refinement, session_id?}` → runs a follow-up instruction against a prior query's SQL through the same full pipeline |
+| `POST /v1/explain` | `{sql}` → plain-English explanation of an arbitrary read-only SQL string |
+| `GET /v1/schema` | Introspected schema (tables, columns, types, FKs, sample values), including any imported datasets |
+| `GET /v1/history?session_id=&favorites_only=` | Past queries for a session, optionally filtered to favorites |
 | `POST /v1/feedback` | `{query_id, correct, notes}` — records correctness feedback (the flywheel: wrong answers become eval regressions, correct ones become candidate few-shot examples) |
+| `POST /v1/history/{query_id}/favorite` | `{favorite}` — stars/unstars a history entry |
+| `GET /v1/query/{query_id}/export?format=csv|json` | Re-executes the stored query and streams the result for download |
+| `POST /v1/datasets/import` | Multipart CSV/Excel upload → imports as a new queryable table |
+| `GET /v1/datasets` | Lists imported datasets (table name, row count, columns, source filename) |
+| `GET /v1/providers` | Active LLM provider/model and which providers have a key configured |
 | `GET /v1/audit?limit=` | Recent guardrail activity (blocks + warnings), most recent first |
 
 ---
