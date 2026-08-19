@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Database, KeyRound, Link2, Loader2, XCircle, Upload, CheckCircle2 } from "lucide-react";
+import { Database, KeyRound, Link2, Loader2, XCircle, Upload, CheckCircle2, Trash2 } from "lucide-react";
 import PageShell from "../components/layout/PageShell";
 import Card from "../components/ui/Card";
 import Badge from "../components/ui/Badge";
@@ -9,19 +9,38 @@ import type { DatasetInfo, SchemaDict } from "../types";
 
 const CANVAS_W = 1000;
 const CANVAS_H = 620;
+const CORE_CY = 230;
 
-function layout(names: string[]) {
+// Core (seeded/FK-connected) tables sit on an ellipse in the upper area.
+// Imported tables never share that ellipse — they get their own row lower
+// down, so a long imported table name can never overlap a core node.
+function layout(coreNames: string[], importedNames: string[]) {
+  const positions: Record<string, { x: number; y: number }> = {};
+
   const cx = CANVAS_W / 2;
-  const cy = CANVAS_H / 2;
-  const rx = CANVAS_W * 0.4;
-  const ry = CANVAS_H * 0.36;
-  const n = Math.max(names.length, 1);
-  return Object.fromEntries(
-    names.map((name, i) => {
-      const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
-      return [name, { x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle) }];
-    })
-  );
+  const rx = CANVAS_W * 0.38;
+  const ry = 150;
+  const n = Math.max(coreNames.length, 1);
+  coreNames.forEach((name, i) => {
+    const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
+    positions[name] = { x: cx + rx * Math.cos(angle), y: CORE_CY + ry * Math.sin(angle) };
+  });
+
+  const rowY = 530;
+  const m = importedNames.length;
+  if (m > 0) {
+    const spacing = Math.min(230, (CANVAS_W - 140) / m);
+    const startX = cx - ((m - 1) * spacing) / 2;
+    importedNames.forEach((name, i) => {
+      positions[name] = { x: startX + i * spacing, y: rowY };
+    });
+  }
+
+  return positions;
+}
+
+function truncateLabel(name: string, max = 17) {
+  return name.length > max ? `${name.slice(0, max - 1)}…` : name;
 }
 
 export default function SchemaExplorer() {
@@ -32,6 +51,8 @@ export default function SchemaExplorer() {
   const [importing, setImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [importSuccess, setImportSuccess] = useState<string | null>(null);
+  const [datasetToRemove, setDatasetToRemove] = useState<string>("");
+  const [removing, setRemoving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function loadSchemaAndDatasets() {
@@ -69,8 +90,43 @@ export default function SchemaExplorer() {
 
   const importedTableNames = useMemo(() => new Set(datasets.map((d) => d.table_name)), [datasets]);
 
+  useEffect(() => {
+    if (datasets.length === 0) {
+      setDatasetToRemove("");
+    } else if (!datasets.some((d) => d.table_name === datasetToRemove)) {
+      setDatasetToRemove(datasets[0].table_name);
+    }
+  }, [datasets, datasetToRemove]);
+
+  async function handleRemoveDataset() {
+    if (!datasetToRemove) return;
+    setRemoving(true);
+    setImportError(null);
+    try {
+      await api.deleteDataset(datasetToRemove);
+      setImportSuccess(`Removed "${datasetToRemove}".`);
+      if (selected === datasetToRemove) setSelected(null);
+      loadSchemaAndDatasets();
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : "Remove failed.");
+    } finally {
+      setRemoving(false);
+    }
+  }
+
   const tableNames = useMemo(() => (schema ? Object.keys(schema) : []), [schema]);
-  const positions = useMemo(() => layout(tableNames), [tableNames]);
+  const coreTableNames = useMemo(
+    () => tableNames.filter((n) => !importedTableNames.has(n)),
+    [tableNames, importedTableNames]
+  );
+  const importedTableNamesInSchema = useMemo(
+    () => tableNames.filter((n) => importedTableNames.has(n)),
+    [tableNames, importedTableNames]
+  );
+  const positions = useMemo(
+    () => layout(coreTableNames, importedTableNamesInSchema),
+    [coreTableNames, importedTableNamesInSchema]
+  );
 
   const links = useMemo(() => {
     if (!schema) return [];
@@ -145,15 +201,28 @@ export default function SchemaExplorer() {
             </div>
           )}
           {datasets.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {datasets.map((d) => (
-                <span
-                  key={d.table_name}
-                  className="rounded-lg border-2 border-ink-950 bg-paper-100 px-2.5 py-1 font-mono text-xs text-slate-700"
-                >
-                  {d.table_name} ({d.row_count} rows)
-                </span>
-              ))}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-xs uppercase tracking-wide text-slate-500">Imported datasets</span>
+              <select
+                value={datasetToRemove}
+                onChange={(e) => setDatasetToRemove(e.target.value)}
+                className="rounded-lg border-2 border-ink-950 bg-paper-100 px-2.5 py-1.5 font-mono text-xs text-slate-700"
+              >
+                {datasets.map((d) => (
+                  <option key={d.table_name} value={d.table_name}>
+                    {d.table_name} ({d.row_count} rows)
+                  </option>
+                ))}
+              </select>
+              <Button
+                variant="outline"
+                className="text-xs"
+                disabled={!datasetToRemove || removing}
+                onClick={handleRemoveDataset}
+              >
+                {removing ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                Remove
+              </Button>
             </div>
           )}
         </Card>
@@ -181,6 +250,19 @@ export default function SchemaExplorer() {
                     <path d="M0 0 L8 4 L0 8 z" fill="#3a4863" />
                   </marker>
                 </defs>
+                {importedTableNamesInSchema.length > 0 && (
+                  <text
+                    x={CANVAS_W / 2}
+                    y={470}
+                    textAnchor="middle"
+                    fill="#5c6b8a"
+                    fontSize="11"
+                    fontFamily="Inter, sans-serif"
+                    letterSpacing="1.5"
+                  >
+                    IMPORTED
+                  </text>
+                )}
                 {links.map((l, i) => {
                   const a = positions[l.from];
                   const b = positions[l.to];
@@ -225,8 +307,9 @@ export default function SchemaExplorer() {
                         strokeDasharray={importedTableNames.has(name) ? "5 4" : undefined}
                         className="transition-all duration-300"
                       />
+                      <title>{name}</title>
                       <text x={0} y={-4} textAnchor="middle" fill="#eef2f8" fontSize="13.5" fontFamily="Space Grotesk, sans-serif" fontWeight={600}>
-                        {name}
+                        {truncateLabel(name)}
                       </text>
                       <text x={0} y={14} textAnchor="middle" fill="#7c88a1" fontSize="10" fontFamily="Inter, sans-serif">
                         {info.columns.length} columns{importedTableNames.has(name) ? " · imported" : ""}

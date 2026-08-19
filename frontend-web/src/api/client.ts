@@ -76,5 +76,7 @@ export const api = {
     return requestForm<DatasetImportResponse>("/v1/datasets/import", form);
   },
   listDatasets: () => request<DatasetInfo[]>("/v1/datasets"),
+  deleteDataset: (tableName: string) =>
+    request<{ status: string }>(`/v1/datasets/${encodeURIComponent(tableName)}`, { method: "DELETE" }),
   providers: () => request<ProviderInfo>("/v1/providers"),
 };

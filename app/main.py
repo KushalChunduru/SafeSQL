@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from app import history
 from app.config import get_settings
-from app.datasets import DatasetImportError, import_dataset, list_datasets
+from app.datasets import DatasetImportError, delete_dataset, import_dataset, list_datasets
 from app.db import get_reader_engine
 from app.guardrails import AUDIT_LOG, apply_guardrails
 from app.llm_client import get_llm_client
@@ -142,6 +142,15 @@ async def import_dataset_endpoint(file: UploadFile = File(...), table_name: str 
 @app.get("/v1/datasets", response_model=list[DatasetInfo])
 def list_datasets_endpoint():
     return list_datasets()
+
+
+@app.delete("/v1/datasets/{table_name}")
+def delete_dataset_endpoint(table_name: str):
+    try:
+        delete_dataset(table_name)
+    except DatasetImportError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "deleted"}
 
 
 @app.get("/v1/providers", response_model=ProviderInfo)

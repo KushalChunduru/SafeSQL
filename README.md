@@ -266,8 +266,12 @@ python -m venv .venv && .venv\Scripts\activate   # Windows
 pip install -r requirements.txt
 copy .env.example .env
 python data/seed.py
-uvicorn app.main:app --reload
+.\run.ps1                                        # Windows — or ./run.sh
 ```
+
+`run.ps1`/`run.sh` always launch uvicorn through `.venv`'s own interpreter explicitly (rather than
+relying on `python` resolving to an activated venv), so the backend can't silently pick up a
+mismatched global Python. Pass `-NoReload` / `--no-reload` to disable autoreload.
 
 By default `.env` has `LLM_PROVIDER=mock`, so the whole pipeline (guardrails, sandboxing,
 hallucination checks, confidence scoring) runs with zero API cost. To use a real model, set one of:

@@ -107,6 +107,33 @@ def import_dataset(file_bytes: bytes, filename: str, table_name: str | None = No
     return DatasetImportResponse(table_name=resolved_name, row_count=len(df), columns=list(df.columns))
 
 
+def delete_dataset(table_name: str) -> None:
+    if not re.match(r"^[a-z_][a-zA-Z0-9_]*$", table_name):
+        raise DatasetImportError(f"'{table_name}' is not a valid table name.")
+
+    engine = get_reader_engine()
+    with engine.connect() as conn:
+        tracked = conn.execute(
+            text(f"SELECT 1 FROM {UPLOADS_META_TABLE} WHERE table_name = :t"),
+            {"t": table_name},
+        ).scalar() if conn.execute(
+            text("SELECT COUNT(*) FROM information_schema.tables WHERE table_name = :t"),
+            {"t": UPLOADS_META_TABLE},
+        ).scalar() else None
+
+    if not tracked:
+        raise DatasetImportError(f"'{table_name}' is not an imported dataset.")
+
+    dispose_and_reset()
+    try:
+        engine = get_app_engine()
+        with engine.begin() as conn:
+            conn.execute(text(f'DROP TABLE IF EXISTS "{table_name}"'))
+            conn.execute(text(f"DELETE FROM {UPLOADS_META_TABLE} WHERE table_name = :t"), {"t": table_name})
+    finally:
+        dispose_and_reset()
+
+
 def list_datasets() -> list[DatasetInfo]:
     engine = get_reader_engine()
     try:
