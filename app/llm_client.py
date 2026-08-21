@@ -18,6 +18,7 @@ from app.prompts import (
 )
 
 FORCE_INVALID_SQL_MARKER = "__force_invalid_sql__"
+FORCE_UNSAFE_SQL_MARKER = "__force_unsafe_sql__"
 
 SQL_TOOL_SCHEMA = {
     "name": "generate_sql",
@@ -68,6 +69,16 @@ class MockLLMClient(LLMClient):
         error_context: dict | None = None,
         prior_sql: str | None = None,
     ) -> SQLGeneration:
+        if FORCE_UNSAFE_SQL_MARKER in question and error_context is None:
+            # Deterministic escape hatch so the guardrail-block path can be demoed/tested
+            # without a real provider ever needing to be coaxed into emitting unsafe SQL.
+            return SQLGeneration(
+                sql="DROP TABLE customers;",
+                explanation="Intentionally unsafe SQL for guardrail testing.",
+                confidence_self_report=0.1,
+                tables_used=[],
+                columns_used=[],
+            )
         if FORCE_INVALID_SQL_MARKER in question and error_context is None:
             # Deterministic escape hatch so the self-correction loop can be exercised in tests
             # without a real provider: passes guardrails (valid SELECT syntax) but fails at
@@ -93,6 +104,21 @@ class MockLLMClient(LLMClient):
             )
 
         q = question.lower().strip()
+
+        unsafe_sql = _detect_unsafe_intent(q, schema)
+        if unsafe_sql is not None:
+            # A real LLM can be tricked or hallucinate into emitting a destructive statement for
+            # a plainly-worded destructive request; the guardrail layer is what actually has to
+            # catch it, not the model refusing. This mirrors that here so the mock provider can
+            # demo/test the guardrail-block path with natural phrasing, not just a hidden marker.
+            return SQLGeneration(
+                sql=unsafe_sql,
+                explanation="Best-effort SQL for a destructive-sounding request.",
+                confidence_self_report=0.4,
+                tables_used=[],
+                columns_used=[],
+            )
+
         for ex in FEW_SHOT_EXAMPLES:
             if _rough_match(q, ex["question"].lower()):
                 sql = ex["sql"]
@@ -132,6 +158,32 @@ class MockLLMClient(LLMClient):
             f"This query reads from {table_list}, {joins}, {filters}. It is {agg}, {order}. "
             "(Deterministic mock explanation - configure a real LLM_PROVIDER for a richer breakdown.)"
         )
+
+
+def _guess_target_table(q: str, schema: dict) -> str:
+    for name in schema:
+        singular = name[:-1] if name.endswith("s") else name
+        if name in q or singular in q:
+            return name
+    return next(iter(schema.keys())) if schema else "customers"
+
+
+def _detect_unsafe_intent(q: str, schema: dict) -> str | None:
+    """Best-effort natural-language -> destructive-SQL mapping, so the mock provider can
+    demonstrate the guardrail layer catching a plainly-worded destructive request (not just
+    the FORCE_UNSAFE_SQL_MARKER test hook)."""
+    table = _guess_target_table(q, schema)
+    if any(w in q for w in ("delete", "remove", "erase", "wipe")) and (
+        "all" in q or "every" in q
+    ):
+        return f"DELETE FROM {table};"
+    if "drop" in q and "table" in q:
+        return f"DROP TABLE {table};"
+    if "truncate" in q:
+        return f"TRUNCATE TABLE {table};"
+    if ("update" in q or "change" in q) and "all" in q:
+        return f"UPDATE {table} SET updated_at = NOW();"
+    return None
 
 
 def _rough_match(a: str, b: str) -> bool:
